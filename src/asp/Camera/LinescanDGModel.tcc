@@ -93,10 +93,12 @@ vw::Vector2 LinescanDGModel<PositionFuncT, VelocityFuncT, PoseFuncT, TimeFuncT>
 
   using namespace vw;
 
-  LinescanCorrLMA model( this, point );
-  int status;
+  // Use the uncorrected function call to get an initial estimate
   Vector2 start = point_to_pixel_uncorrected(point, starty);
 
+  // Improve the estimate using a model including the correction
+  LinescanCorrLMA model( this, point );
+  int status;
   Vector3 objective(0, 0, 0);
   Vector2 solution
     = math::levenberg_marquardt(model, start, objective, status,
@@ -123,24 +125,68 @@ vw::Vector3 LinescanDGModel<PositionFuncT, VelocityFuncT, PoseFuncT, TimeFuncT>
 
   if (!m_correct_velocity_aberration) return pix_to_vec;
 
+
+  // Correct for atmospheric refraction
+  // - From "Atmospheric Correction and Velocity Aberration for Physical Sensor 
+  //         Modeling of High-Resolution Satellite Images" by Oh and Lee
+
+  // Get some information
+  Vector3 cam_ctr              = camera_center(pix); // ECF camera coords
+  Vector3 cam_vel              = camera_velocity(pix); // The camera's velocity in its own frame
+  double  earth_ctr_to_cam     = norm_2(cam_ctr);    // Distance in meters from cam to earth center
+  double  earth_rad            = 6371000.0; // TODO: Vary by location?
+  double  cam_to_earth_surface = earth_ctr_to_cam - earth_rad;
+
+    
+  // Compute atmospheric condition constant K
+  // TODO: Double check orig paper
+  double H      = cam_to_earth_surface / 1000.0; // In kilometers
+  double h      = 0; // Height of target point over surface // TODO: Use this! (in kilometers)
+  double h_diff = H - h;
+  double p1     = (2335.0 / h_diff)*pow(1 - 0.02257*h, 5.256);
+  double p2     = pow(0.8540, H-11.0) * (82.2 - 521.0/h_diff);
+  double K      = (p1 - p2) * 10e-6;
+  
+  // Compute angle alpha and correction angle
+  // TODO: Should be a function call
+  Vector3 cam_ctr_norm = normalize(cam_ctr);
+  Vector3 u            = pix_to_vec;
+  double  alpha        = acos(dot_prod(cam_ctr_norm,u) / (norm_2(cam_ctr_norm)*norm_2(u)) );  
+  double  delta_alpha  = K * tan(alpha);
+
+  
+  // Rotate the vector by delta_alpha
+  Vector3 rotation_axis = normalize(cross_prod(u, cam_ctr_norm));
+  Quaternion<double> refraction_rotation(rotation_axis, delta_alpha);
+  Vector3 u_prime = refraction_rotation.rotate(u);
+  double  check_delta  = acos(dot_prod(u_prime,u) / (norm_2(u_prime)*norm_2(u)) );
+/*
+  vw_out() << "Computed K = " << K << std::endl;
+  vw_out() << "Computed rot axis = " << rotation_axis << std::endl;
+  vw_out() << "Computed delta_alpha = " << delta_alpha << std::endl;
+  vw_out() << "Computed check = " << check_delta << std::endl;  
+  vw_out() << "Computed u = " << u << std::endl;
+  vw_out() << "Computed u prime = " << u_prime << std::endl;
+*/
+  pix_to_vec = u_prime;
+
   // Correct for velocity aberration
+  // - If this is not done the positions will be well off the corresponding RPC locations.
+  // - TODO: This should be an option for other satellite cameras, it is not
+  //         specific to DG.
 
   // 1. Find the distance from the camera to the first
   // intersection of the current ray with the Earth surface.
-  Vector3 cam_ctr          = camera_center(pix);
-  double  earth_ctr_to_cam = norm_2(cam_ctr);
   double  cam_angle_cos    = dot_prod(pix_to_vec, -normalize(cam_ctr));
   double  len_cos          = earth_ctr_to_cam*cam_angle_cos;
-  double  earth_rad        = 6371000.0; // TODO: Vary by location?
   double  cam_to_surface   = len_cos - sqrt(earth_rad*earth_rad
-					    + len_cos*len_cos
-					    - earth_ctr_to_cam*earth_ctr_to_cam);
+                              					    + len_cos*len_cos
+                              					    - earth_ctr_to_cam*earth_ctr_to_cam);
 
   // 2. Correct the camera velocity due to the fact that the Earth
   // rotates around its axis.
   double seconds_in_day = 86164.0905;
-  Vector3 earth_rotation_vec(0.0, 0.0, 2*M_PI/seconds_in_day);
-  Vector3 cam_vel = camera_velocity(pix);
+  Vector3 earth_rotation_vec(0.0, 0.0, 2*M_PI/seconds_in_day); // Radians per second
   Vector3 cam_vel_corr1 = cam_vel - cam_to_surface * cross_prod(earth_rotation_vec, pix_to_vec);
 
   // 3. Find the component of the camera velocity orthogonal to the
