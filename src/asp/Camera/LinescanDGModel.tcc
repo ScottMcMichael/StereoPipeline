@@ -132,6 +132,8 @@ vw::Vector3 LinescanDGModel<PositionFuncT, VelocityFuncT, PoseFuncT, TimeFuncT>
 
   // Get some information
   Vector3 cam_ctr              = camera_center(pix); // ECF camera coords
+  Vector3 cam_ctr_norm         = normalize(cam_ctr);
+  Vector3 cam_to_earth_center_unit = -cam_ctr_norm;
   Vector3 cam_vel              = camera_velocity(pix); // The camera's velocity in its own frame
   double  earth_ctr_to_cam     = norm_2(cam_ctr);    // Distance in meters from cam to earth center
   double  earth_rad            = 6371000.0; // TODO: Vary by location?
@@ -149,14 +151,13 @@ vw::Vector3 LinescanDGModel<PositionFuncT, VelocityFuncT, PoseFuncT, TimeFuncT>
   
   // Compute angle alpha and correction angle
   // TODO: Should be a function call
-  Vector3 cam_ctr_norm = normalize(cam_ctr);
-  Vector3 u            = pix_to_vec;
-  double  alpha        = acos(dot_prod(cam_ctr_norm,u) / (norm_2(cam_ctr_norm)*norm_2(u)) );  
+  Vector3 u     = normalize(pix_to_vec);
+  double  alpha = acos(dot_prod(cam_to_earth_center_unit,u));  // Both vectors are norm=1 so this gets the angle
   double  delta_alpha  = K * tan(alpha);
 
   
   // Rotate the vector by delta_alpha
-  Vector3 rotation_axis = normalize(cross_prod(u, cam_ctr_norm));
+  Vector3 rotation_axis = normalize(cross_prod(u, cam_to_earth_center_unit));
   Quaternion<double> refraction_rotation(rotation_axis, delta_alpha);
   Vector3 u_prime = refraction_rotation.rotate(u);
   double  check_delta  = acos(dot_prod(u_prime,u) / (norm_2(u_prime)*norm_2(u)) );
@@ -177,13 +178,13 @@ vw::Vector3 LinescanDGModel<PositionFuncT, VelocityFuncT, PoseFuncT, TimeFuncT>
 
   // 1. Find the distance from the camera to the first
   // intersection of the current ray with the Earth surface.
-  double  cam_angle_cos    = dot_prod(pix_to_vec, -normalize(cam_ctr));
-  double  len_cos          = earth_ctr_to_cam*cam_angle_cos;
-  double  cam_to_surface   = len_cos - sqrt(earth_rad*earth_rad
+  double  cam_angle_cos    = dot_prod(pix_to_vec, cam_to_earth_center_unit); // Get cosin of the angle
+  double  len_cos          = earth_ctr_to_cam*cam_angle_cos; // Distance from cam to right-angle intersection
+  double  cam_to_surface   = len_cos - sqrt(earth_rad*earth_rad // Trig based on zero elevation intersection
                               					    + len_cos*len_cos
                               					    - earth_ctr_to_cam*earth_ctr_to_cam);
 
-  // 2. Correct the camera velocity due to the fact that the Earth
+  // 2. Correct the camera velocity (GCC frame) due to the fact that the Earth
   // rotates around its axis.
   double seconds_in_day = 86164.0905;
   Vector3 earth_rotation_vec(0.0, 0.0, 2*M_PI/seconds_in_day); // Radians per second
