@@ -32,13 +32,14 @@ namespace asp {
 
 namespace asp {
 
+  // TODO: Move this!
   /// We would like to split the numbers 0, ..., n - 1 into k buckets
   /// of approximately equal size. For example, for n = 8 and k = 3,
   /// we will have the split {0, 1, 2}, {3, 4, 5}, {6, 7}.
   void split_n_into_k(int n, int k, std::vector<int> & partition);
 
-  /// Create a local homography for each correlation tile
-  void create_local_homographies(ASPGlobalOptions const& opt);
+
+  //TODO: Move some functionality from stereo_corr to here?
 
   void write_local_homographies(std::string const& local_hom_file,
                                 vw::ImageView<vw::Matrix3x3> const& local_hom);

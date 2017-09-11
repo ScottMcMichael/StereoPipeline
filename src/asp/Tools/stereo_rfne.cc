@@ -225,6 +225,7 @@ public:
     bool verbose = false;
     if (stereo_settings().seed_mode > 0 && stereo_settings().use_local_homography){
 
+      // TODO: Check!
       int ts = ASPGlobalOptions::corr_tile_size();
       Matrix<double>  lowres_hom = m_local_hom(bbox.min().x()/ts, bbox.min().y()/ts);
       Vector3 upscale( m_upscale_factor[0],     m_upscale_factor[1],     1 );
