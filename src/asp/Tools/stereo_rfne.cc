@@ -35,7 +35,7 @@ using namespace asp;
 using namespace std;
 
 
-#define DEBUG_RM 0 // <RM>: Turn on to write debug information for local homography code!
+//#define DEBUG_RM 0 // <RM>: Turn on to write debug information for local homography code!
 
 namespace vw {
   template<> struct PixelFormatID<PixelMask<Vector<float, 5> > >   { static const PixelFormatEnum value = VW_PIXEL_GENERIC_6_CHANNEL; };
@@ -184,7 +184,7 @@ class PerTileRfne: public ImageViewBase<PerTileRfne<Image1T, Image2T, SeedDispT>
   ImageViewRef<uint8>  m_left_mask; //<RM>: added to support affineepipolar piecewise alignment method
   ImageViewRef<uint8>  m_right_mask;
   SeedDispT            m_integer_disp;
-  ImageView<Matrix3x3> m_local_hom;
+  ImageView<Matrix3x3> m_local_hom_R;
   ImageView<Matrix3x3> m_local_hom_L; //<RM>: 
   ImageView<Matrix3x3> m_local_size;  //<RM>:
   ASPGlobalOptions const&       m_opt;
@@ -204,7 +204,7 @@ public:
     m_left_image(left_image.impl()), m_right_image(right_image.impl()),
     m_left_mask(left_mask), m_right_mask(right_mask),
     m_integer_disp( integer_disp.impl() ), 
-    m_local_hom(local_hom), m_local_hom_L(local_hom_L), m_local_size(local_size),
+    m_local_hom_R(local_hom), m_local_hom_L(local_hom_L), m_local_size(local_size),
     m_opt(opt){
 
     m_upscale_factor = Vector2(double(m_left_image.impl().cols()) / sub_disp_size[0],
@@ -236,101 +236,105 @@ public:
       int tile_size = ASPGlobalOptions::corr_tile_size();
 #if DEBUG_RM
       cartography::GdalWriteOptions geo_opt;
-      char outputName[30];
-      const int W = bbox.min().x()/tile_size;
-      const int H = bbox.min().y()/tile_size;
+      const int tile_col = bbox.min().x()/tile_size;
+      const int tile_row = bbox.min().y()/tile_size;
 #endif
       int margin = tile_size * 0.4; //<RM>: Has to be the same for stereo_corr
       BBox2i newBBox = bbox;
       newBBox.expand(margin);
       newBBox.crop(bounding_box(m_left_image));
-      Matrix<double>  fullres_hom   = m_local_hom(bbox.min().x()/tile_size, bbox.min().y()/tile_size);
-      Matrix<double>  fullres_hom_L = m_local_hom_L(bbox.min().x()/tile_size, bbox.min().y()/tile_size);
+      Matrix<double> homograpy_L = m_local_hom_L(tile_col, tile_row);
+      Matrix<double> homograpy_R = m_local_hom_R(tile_col, tile_row);
 #if DEBUG_RM
-      cout << " fullres_hom = " << fullres_hom << endl;
+      cout << " homograpy_R = " << homograpy_R << endl;
       cout << " bbox = " << bbox << endl;
 #endif
-      ImageView<float> tile_right_image = crop(m_right_image.impl(), newBBox);
-      ImageView<float> tile_left_image = crop(m_left_image.impl(), newBBox);
-      ImageView<vw::uint8> tile_right_image_mask = crop(m_right_mask.impl(), newBBox);
-      ImageView<vw::uint8> tile_left_image_mask = crop(m_left_mask.impl(), newBBox);
-        typedef typename SeedDispT::pixel_type disp_pix_type;
-      ImageView<disp_pix_type> tile_disp_image = crop(m_integer_disp.impl(), bbox);
-      ImageView<vw::uint8> tile_disp_image_mask = channel_cast_rescale<uint8>(select_channel(tile_disp_image, 2));
+      // Extract the left and right tiles for processing
+      // - TODO: Can we use Refs for this?
+      typedef typename SeedDispT::pixel_type disp_pix_type;
+      ImageView<float    > tile_right_image      = crop(m_right_image.impl(), newBBox);
+      ImageView<float    > tile_left_image       = crop(m_left_image.impl (), newBBox);
+      ImageView<vw::uint8> tile_right_image_mask = crop(m_right_mask.impl (), newBBox);
+      ImageView<vw::uint8> tile_left_image_mask  = crop(m_left_mask.impl  (), newBBox);
+      ImageView<disp_pix_type> tile_disp_image   = crop(m_integer_disp.impl(), bbox);
+      ImageView<vw::uint8> tile_disp_image_mask  = channel_cast_rescale<uint8>(select_channel(tile_disp_image, 2));
 
-      Vector2i left_size = newBBox.size();
-      Vector2i right_size = newBBox.size();
-
-      left_size.x() = m_local_size(bbox.min().x()/tile_size, bbox.min().y()/tile_size)(0,0);
-      left_size.y() = m_local_size(bbox.min().x()/tile_size, bbox.min().y()/tile_size)(0,1);
+      Vector2i left_size, right_size;
+      left_size.x() = m_local_size(tile_col, tile_row)(0,0);
+      left_size.y() = m_local_size(tile_col, tile_row)(0,1);
       right_size = left_size;
-#if DEBUG_RM
-      cout << "left_size = " << left_size << endl;
-#endif
-
-        // Must transform the right image by the local disparity
-        // to be in the same conditions as for stereo correlation.
-        typedef float right_pix_type;
-        ImageViewRef< PixelMask<right_pix_type> > right_trans_masked_img
-      // apply transf to tile individually 
+      
+      // Apply the left and right transforms to the input images.
+      
+      // Must transform the right image by the local disparity
+      // to be in the same conditions as for stereo correlation.
+      typedef Image1T::pixel_type left_pix_type;
+      typedef Image2T::pixel_type right_pix_type; 
+      ImageViewRef< PixelMask<right_pix_type> > right_trans_masked_img
           = transform (copy_mask( tile_right_image, create_mask(tile_right_image_mask) ),
-                       HomographyTransform(fullres_hom),
+                       HomographyTransform(homograpy_R),
                        right_size.x(), right_size.y());
-        ImageViewRef<right_pix_type> right_trans_img = apply_mask(right_trans_masked_img);
-#if DEBUG_RM
-      sprintf(outputName, "aligned_R_%d_%d.tif", H, W);
-      vw::cartography::block_write_gdal_image(outputName, right_trans_img, geo_opt);
-#endif
-      typedef float left_pix_type;
-        ImageViewRef< PixelMask<left_pix_type> > left_trans_masked_img
-          = transform (copy_mask( tile_left_image, create_mask(tile_left_image_mask) ),
-                       HomographyTransform(fullres_hom_L),
-                       left_size.x(), left_size.y());
-        ImageViewRef<left_pix_type> left_trans_img = apply_mask(left_trans_masked_img);
-#if DEBUG_RM
-      sprintf(outputName, "aligned_L_%d_%d.tif", H, W);
-      vw::cartography::block_write_gdal_image(outputName, left_trans_img, geo_opt);
-#endif
-
+      ImageViewRef< PixelMask<left_pix_type> > left_trans_masked_img
+        = transform (copy_mask( tile_left_image, create_mask(tile_left_image_mask) ),
+                     HomographyTransform(homograpy_L),
+                     left_size.x(), left_size.y());
       ImageViewRef<disp_pix_type> disp_trans_img
           = transform ( tile_disp_image,
-                       HomographyTransform(fullres_hom_L),
+                       HomographyTransform(homograpy_L),
                        left_size.x(), left_size.y(), ConstantEdgeExtension());
+                                            
+      ImageViewRef<right_pix_type> right_trans_img = apply_mask(right_trans_masked_img);
+      ImageViewRef<left_pix_type > left_trans_img  = apply_mask(left_trans_masked_img);
+      
 #if DEBUG_RM
-      sprintf(outputName, "disp_%d_%d.tif", H, W);
-      vw::cartography::block_write_gdal_image(outputName, disp_trans_img, geo_opt);
+      // Write debug images
+      sprintf(outputName, "aligned_R_%d_%d.tif", tile_row, tile_col);
+      sprintf(outputName, "aligned_L_%d_%d.tif", tile_row, tile_col);
+      sprintf(outputName, "disp_%d_%d.tif",      tile_row, tile_col);
+      vw::cartography::block_write_gdal_image(outputName, right_trans_img, geo_opt);
+      vw::cartography::block_write_gdal_image(outputName, left_trans_img,  geo_opt);
+      vw::cartography::block_write_gdal_image(outputName, disp_trans_img,  geo_opt);
 #endif
 
+      // Perform stereo refinement on the 
       BBox2i newBBoxDisp = BBox2i(0, 0, left_size.x(), left_size.y());
       ImageView<pixel_type> tile_disparity_trans;
       tile_disparity_trans = crop(refine_disparity(left_trans_img, right_trans_img,
-									         disp_trans_img, m_opt, verbose), newBBoxDisp);
+                                                   disp_trans_img, m_opt, verbose),
+                                  newBBoxDisp);
 #if DEBUG_RM
-        sprintf(outputName, "disp1_%d_%d.tif", H, W);
+      sprintf(outputName, "disp1_%d_%d.tif", tile_row, tile_col);
       vw::cartography::block_write_gdal_image(outputName, tile_disparity_trans, geo_opt);
 #endif
+
+      // Apply the inverse transform to the refinement result so that it
+      //  lines up with the original left image.
       ImageView<pixel_type> tile_disparity_trans_inv
 	      = transform (tile_disparity_trans,
-                   HomographyTransform(inverse(fullres_hom_L)),
-			      newBBox.width(), newBBox.height());
+                     HomographyTransform(inverse(homograpy_L)),
+			               newBBox.width(), newBBox.height());
 #if DEBUG_RM
-      sprintf(outputName, "disp2_%d_%d.tif", H, W);
+      sprintf(outputName, "disp2_%d_%d.tif", tile_row, tile_col);
       vw::cartography::block_write_gdal_image(outputName, tile_disparity_trans_inv, geo_opt);
 #endif
+
+      // Corret the output disparity values so they reflect the disparities between the original
+      // input images, not the aligned tiles.
+      
       // adding margin for non edge cases
-      double marginMinX = bbox.min().x() == 0 ? 0 : margin;
-      double marginMinY = bbox.min().y() == 0 ? 0 : margin;
+      double marginMinX = (bbox.min().x() == 0) ? 0 : margin;
+      double marginMinY = (bbox.min().y() == 0) ? 0 : margin;
       //<RM>: overwrite tile_disparity by adjusting right tile and calculating the new disparity (unaligned L and unaligned R)
       for(int j=0; j<bbox.height(); j++ ){
         for(int i=0; i<bbox.width(); i++ ){
-	        Vector2 pixel_L = Vector2(i,j);
-	        Vector2 pixel_L_buf = Vector2(i+marginMinX,j+marginMinY);
-	        Vector2 pixel_L_trans = HomographyTransform(fullres_hom_L).forward(pixel_L_buf); //<RM>: L trans
+	        Vector2 pixel_L       = Vector2(i,j);
+	        Vector2 pixel_L_buf   = Vector2(i+marginMinX,j+marginMinY);
+	        Vector2 pixel_L_trans = HomographyTransform(homograpy_L).forward(pixel_L_buf); //<RM>: L trans
 	        float dx = tile_disparity_trans_inv(i,j)[0]; //<RM>: D -> R trans to L trans
 	        float dy = tile_disparity_trans_inv(i,j)[1];
 	        Vector2 pixel_R_trans = pixel_L_trans + Vector2(dx,dy); //<RM>: R trans
-	        Vector2 pixel_R_buf = HomographyTransform(inverse(fullres_hom)).forward(pixel_R_trans); //<RM>: R NO trans
-	        Vector2 pixel_R = pixel_R_buf - Vector2(marginMinX, marginMinY);
+	        Vector2 pixel_R_buf = HomographyTransform(inverse(homograpy_R)).forward(pixel_R_trans); //<RM>: R NO trans
+	        Vector2 pixel_R  = pixel_R_buf - Vector2(marginMinX, marginMinY);
 	        Vector2 disp_L_R = pixel_R - pixel_L;
 	        tile_disparity(i,j)[0] = disp_L_R.x();
 	        tile_disparity(i,j)[1] = disp_L_R.y();
@@ -339,13 +343,14 @@ public:
         } // End col loop
       } // End row loop
 #if DEBUG_RM
-      sprintf(outputName, "disp3_%d_%d.tif", H, W);			
+      sprintf(outputName, "disp3_%d_%d.tif", tile_row, tile_col);			
       vw::cartography::block_write_gdal_image(outputName, tile_disparity, geo_opt);
 #endif
-    }else{ // Not using local homography
+    }else{ // Not using local alignment
+    
       tile_disparity = crop(refine_disparity(m_left_image, m_right_image,
-                                             m_integer_disp, m_opt, verbose), bbox);
-    }
+                                             m_integer_disp, m_opt, verbose), bbox);                                
+    } // End non-local-alignment case.
     
     prerasterize_type disparity = prerasterize_type(tile_disparity,
                                                     -bbox.min().x(), -bbox.min().y(),
