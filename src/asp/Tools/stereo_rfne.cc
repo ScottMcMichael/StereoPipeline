@@ -234,11 +234,10 @@ public:
     bool verbose = false;
     if (stereo_settings().use_local_homography){
       int tile_size = ASPGlobalOptions::corr_tile_size();
-#if DEBUG_RM
+
       cartography::GdalWriteOptions geo_opt;
       const int tile_col = bbox.min().x()/tile_size;
       const int tile_row = bbox.min().y()/tile_size;
-#endif
       int margin = tile_size * 0.4; //<RM>: Has to be the same for stereo_corr
       BBox2i newBBox = bbox;
       newBBox.expand(margin);
@@ -252,8 +251,10 @@ public:
       // Extract the left and right tiles for processing
       // - TODO: Can we use Refs for this?
       typedef typename SeedDispT::pixel_type disp_pix_type;
-      ImageView<float    > tile_right_image      = crop(m_right_image.impl(), newBBox);
-      ImageView<float    > tile_left_image       = crop(m_left_image.impl (), newBBox);
+      typedef typename Image1T::pixel_type left_pix_type;
+      typedef typename Image2T::pixel_type right_pix_type; 
+      ImageView<left_pix_type> tile_right_image      = crop(m_right_image.impl(), newBBox);
+      ImageView<right_pix_type> tile_left_image       = crop(m_left_image.impl (), newBBox);
       ImageView<vw::uint8> tile_right_image_mask = crop(m_right_mask.impl (), newBBox);
       ImageView<vw::uint8> tile_left_image_mask  = crop(m_left_mask.impl  (), newBBox);
       ImageView<disp_pix_type> tile_disp_image   = crop(m_integer_disp.impl(), bbox);
@@ -268,8 +269,6 @@ public:
       
       // Must transform the right image by the local disparity
       // to be in the same conditions as for stereo correlation.
-      typedef Image1T::pixel_type left_pix_type;
-      typedef Image2T::pixel_type right_pix_type; 
       ImageViewRef< PixelMask<right_pix_type> > right_trans_masked_img
           = transform (copy_mask( tile_right_image, create_mask(tile_right_image_mask) ),
                        HomographyTransform(homograpy_R),
@@ -379,8 +378,8 @@ per_tile_rfne( ImageViewBase<Image1T  > const& left,
   typedef PerTileRfne<Image1T, Image2T, SeedDispT> return_type;
   return return_type( left.impl(), right.impl(), left_mask, right_mask,
                       integer_disp.impl(), sub_disp_size.impl(), local_hom,
-					  local_hom_L, local_size,
-					  opt );
+                      local_hom_L, local_size,
+                      opt );
 }
 
 void stereo_refinement( ASPGlobalOptions const& opt ) {
