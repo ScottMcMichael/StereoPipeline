@@ -202,7 +202,6 @@ namespace asp {
     bool inlier = false;
     if (nadir_facing) {
       // Run an IP matching function that takes the camera and datum info into account
-      bool single_threaded_camera = true; // TODO: This is probably needed only for ISIS.
 
       bool use_sphere_for_isis = false; // Assume Mars is not a sphere
       cartography::Datum datum = this->get_datum(cam1, use_sphere_for_isis);
@@ -251,7 +250,7 @@ namespace asp {
       vw_out() << "\t    IP uniqueness threshold     = " << ip_uniqueness_thresh  << std::endl;
 
       if (stereo_settings().skip_rough_homography) {
-        inlier = ip_matching_no_align(single_threaded_camera, cam1, cam2,
+        inlier = ip_matching_no_align(!supports_multi_threading(), cam1, cam2,
                                       image1_norm, image2_norm,
                                       ip_per_tile, datum,
                                       epipolar_threshold, ip_uniqueness_thresh,
@@ -259,7 +258,7 @@ namespace asp {
                                       left_ip_file, right_ip_file,
                                       nodata1, nodata2);
       } else {
-        inlier = ip_matching_w_alignment(single_threaded_camera, cam1, cam2,
+        inlier = ip_matching_w_alignment(!supports_multi_threading(), cam1, cam2,
                                          image1_norm, image2_norm,
                                          ip_per_tile,
                                          datum, match_filename,
